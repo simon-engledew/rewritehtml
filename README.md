@@ -39,4 +39,13 @@ mux.Handle("/static", http.StripPrefix("/static", fs))
 mux.Handle("/hmr", http.StripPrefix("/hmr", proxy))
 
 http.ListenAndServe("127.0.0.1:3000", protect(mux))
-``` 
+```
+
+The JavaScript application can then access the CSRF token with something like:
+
+```javascript
+function csrf() {
+  const element = document.querySelector('meta[name="csrf"]');
+  return element && element.getAttribute('content');
+}
+```
