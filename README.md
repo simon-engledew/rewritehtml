@@ -2,6 +2,10 @@
 
 Inject CSRF tokens into static single page webapps.
 
+Useful if you have server side rendered a React application and want to access a CSRF token without making an additional remote request.
+
+Can be run as a httputil.SingleHostReverseProxy in front of a webserver like Nginx, or as a http.Handler wrapping another http.Handler, e.g: http.FileServer.
+
 ```golang
 func csrfMeta(r *http.Request) (string, error) {
     token := csrf.Token(r.Request)
