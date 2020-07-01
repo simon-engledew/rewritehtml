@@ -13,12 +13,12 @@ func csrfMeta(r *http.Request) (string, error) {
     return fmt.Sprintf(`<meta name="csrf" content="%s" />`, template.EscapeHTMLString(token)), nil
 }
 
-fs := Handle(http.FileServer(http.Dir(".")), meta)
+fs := injecthead.Handle(http.FileServer(http.Dir(".")), meta)
 
-proxy := httputil.NewSingleHostReverseProxy(&url.URL{
+proxy := injecthead.Wrap(httputil.NewSingleHostReverseProxy(&url.URL{
     Scheme: "http",
     Host:   "127.0.0.1:4000",
-})
+}), meta)
 
 protect := csrf.Protect(
     CSRF_SECRET,
