@@ -116,7 +116,7 @@ func NewResponseBuffer() *responseBuffer {
 	return &responseBuffer{
 		header:     make(http.Header),
 		buffer:     getBuffer(),
-		statusCode: 200,
+		statusCode: http.StatusOK,
 	}
 }
 
@@ -139,7 +139,7 @@ func (r *responseBuffer) Body() []byte {
 func (r *responseBuffer) Reset() {
 	r.buffer.Reset()
 	r.header = make(http.Header)
-	r.statusCode = 200
+	r.statusCode = http.StatusOK
 }
 
 func (r *responseBuffer) Flush(w http.ResponseWriter) (int64, error) {
