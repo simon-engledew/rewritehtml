@@ -2,6 +2,7 @@ package injecthead // import "github.com/simon-engledew/injecthead"
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"golang.org/x/net/html"
 	"io"
@@ -106,85 +107,104 @@ func getBuffer() *bytes.Buffer {
 	return buffers.Get().(*bytes.Buffer)
 }
 
-type responseBuffer struct {
-	header     http.Header
-	buffer     *bytes.Buffer
-	statusCode int
+type responsePipe struct {
+	StatusCode int
+	target     http.ResponseWriter
+	Body       chan io.ReadCloser
+	pW         io.WriteCloser
+	pR         io.ReadCloser
 }
 
-func NewResponseBuffer() *responseBuffer {
-	return &responseBuffer{
-		header:     make(http.Header),
-		buffer:     getBuffer(),
-		statusCode: http.StatusOK,
+func NewResponsePipe(target http.ResponseWriter) *responsePipe {
+	pR, pW := io.Pipe()
+
+	return &responsePipe{
+		StatusCode: http.StatusOK,
+		target:     target,
+		Body:       make(chan io.ReadCloser),
+		pW:         pW,
+		pR:         pR,
 	}
 }
 
-func (r *responseBuffer) Header() http.Header {
-	return r.header
+func (r *responsePipe) Header() http.Header {
+	return r.target.Header()
 }
 
-func (r *responseBuffer) Write(p []byte) (int, error) {
-	return r.buffer.Write(p)
+func (r *responsePipe) Write(p []byte) (int, error) {
+	return r.pW.Write(p)
 }
 
-func (r *responseBuffer) WriteHeader(statusCode int) {
-	r.statusCode = statusCode
+func (r *responsePipe) WriteHeader(statusCode int) {
+	r.StatusCode = statusCode
+	r.Body <- r.pR
 }
 
-func (r *responseBuffer) Body() []byte {
-	return r.buffer.Bytes()
-}
-
-func (r *responseBuffer) Reset() {
-	r.buffer.Reset()
-	r.header = make(http.Header)
-	r.statusCode = http.StatusOK
-}
-
-func (r *responseBuffer) Flush(w http.ResponseWriter) (int64, error) {
-	defer putBuffer(r.buffer)
-	for k, v := range r.header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(r.statusCode)
-	return io.Copy(w, r.buffer)
+func (r *responsePipe) Close() (err error) {
+	return r.pW.Close()
 }
 
 // Handle wraps next in a handler which will insert the result of processRequest at the first
 // head tag found in the response body
 func Handle(next http.Handler, processRequest func(r *http.Request) (string, error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancelFunc := context.WithCancel(r.Context())
+		defer cancelFunc()
+
 		r.Header.Set("Accept-Encoding", "identity")
 
-		buffer := NewResponseBuffer()
+		rp := NewResponsePipe(w)
 
-		next.ServeHTTP(buffer, r)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-		if strings.HasPrefix(buffer.Header().Get("Content-Type"), "text/html") {
-			data, err := processRequest(r)
+			select {
+			case <-ctx.Done():
+				// request had no body or was cancelled
+				return
+			case body := <-rp.Body:
+				defer func() {
+					if err := body.Close(); err != nil {
+						panic(err)
+					}
+				}()
 
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				header := w.Header()
+
+				if !strings.HasPrefix(header.Get("Content-Type"), "text/html") {
+					w.WriteHeader(rp.StatusCode)
+					_, _ = io.Copy(w, body)
+					return
+				}
+
+				data, err := processRequest(r)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+
+				header.Set("Transfer-Encoding", "chunked")
+				header.Del("Content-Length")
+
+				w.WriteHeader(rp.StatusCode)
+
+				if _, err := InjectHead(w, body, data); err != nil {
+					panic(err)
+				}
+
 				return
 			}
+		}()
 
-			body := buffer.Body()[:]
-			buffer.Reset()
-			buffer.buffer.Grow(len(body) + len(data))
+		next.ServeHTTP(rp, r)
 
-			if written, err := InjectHead(buffer, bytes.NewReader(body), data); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			} else {
-				r.Header.Set("Content-Encoding", "identity")
-				r.Header.Set("Content-Length", strconv.FormatInt(written, 10))
-			}
-		}
-
-		if _, err := buffer.Flush(w); err != nil {
+		if err := rp.Close(); err != nil {
 			panic(err)
 		}
+
+		wg.Wait()
 	})
 }
 
