@@ -19,7 +19,7 @@ func csrfMeta(r *http.Request) (string, error) {
 
 fs := injecthead.Handle(http.FileServer(http.Dir(".")), meta)
 
-proxy := injecthead.Wrap(httputil.NewSingleHostReverseProxy(&url.URL{
+proxy := injecthead.Handle(httputil.NewSingleHostReverseProxy(&url.URL{
     Scheme: "http",
     Host:   "127.0.0.1:4000",
 }), meta)

@@ -7,8 +7,6 @@ import (
 	"golang.org/x/net/html"
 	"io"
 	"net/http"
-	"net/http/httputil"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -75,52 +73,20 @@ func InjectHead(w io.Writer, r io.Reader, data string) (n int64, err error) {
 	return
 }
 
-var buffers = sync.Pool{
-	New: func() interface{} {
-		buffer := new(bytes.Buffer)
-		buffer.Grow(32 * 1024)
-		return buffer
-	},
-}
-
-type poolBuffer struct {
-	*bytes.Buffer
-}
-
-func NewPoolBuffer() *poolBuffer {
-	return &poolBuffer{
-		getBuffer(),
-	}
-}
-
-func (buffer *poolBuffer) Close() error {
-	buffer.Reset()
-	putBuffer(buffer.Buffer)
-	return nil
-}
-
-func putBuffer(buffer *bytes.Buffer) {
-	buffers.Put(buffer)
-}
-
-func getBuffer() *bytes.Buffer {
-	return buffers.Get().(*bytes.Buffer)
-}
-
 type responsePipe struct {
-	StatusCode int
-	target     http.ResponseWriter
 	Body       chan io.ReadCloser
-	pW         io.WriteCloser
-	pR         io.ReadCloser
+	StatusCode int
+	header     http.Header
+	pW         *io.PipeWriter
+	pR         *io.PipeReader
 }
 
-func NewResponsePipe(target http.ResponseWriter) *responsePipe {
+func NewResponsePipe(header http.Header) *responsePipe {
 	pR, pW := io.Pipe()
 
 	return &responsePipe{
 		StatusCode: http.StatusOK,
-		target:     target,
+		header:     header,
 		Body:       make(chan io.ReadCloser),
 		pW:         pW,
 		pR:         pR,
@@ -128,7 +94,7 @@ func NewResponsePipe(target http.ResponseWriter) *responsePipe {
 }
 
 func (r *responsePipe) Header() http.Header {
-	return r.target.Header()
+	return r.header
 }
 
 func (r *responsePipe) Write(p []byte) (int, error) {
@@ -153,7 +119,9 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (string, err
 
 		r.Header.Set("Accept-Encoding", "identity")
 
-		rp := NewResponsePipe(w)
+		header := w.Header()
+
+		rp := NewResponsePipe(header)
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -170,8 +138,6 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (string, err
 						panic(err)
 					}
 				}()
-
-				header := w.Header()
 
 				if !strings.HasPrefix(header.Get("Content-Type"), "text/html") {
 					w.WriteHeader(rp.StatusCode)
@@ -200,62 +166,8 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (string, err
 
 		next.ServeHTTP(rp, r)
 
-		if err := rp.Close(); err != nil {
-			panic(err)
-		}
+		_ = rp.Close()
 
 		wg.Wait()
 	})
-}
-
-// Wrap a proxy with settings to insert the result of processRequest at the first
-// head tag found in each response body
-func Wrap(proxy *httputil.ReverseProxy, processRequest func(r *http.Request) (string, error)) *httputil.ReverseProxy {
-	proxy2 := new(httputil.ReverseProxy)
-	proxy2.Director = func(r *http.Request) {
-		r.Header.Set("Accept-Encoding", "identity")
-		proxy.Director(r)
-	}
-	proxy2.ModifyResponse = func(r *http.Response) error {
-		if !strings.HasPrefix(r.Header.Get("Content-Type"), "text/html") {
-			return nil
-		}
-
-		data, err := processRequest(r.Request)
-
-		if err != nil {
-			return err
-		}
-
-		buffer := NewPoolBuffer()
-
-		written, err := InjectHead(buffer, r.Body, data)
-
-		if err != nil {
-			// cannot return error, see above
-			_ = buffer.Close()
-			return err
-		}
-
-		if err := r.Body.Close(); err != nil {
-			// cannot return error, see above
-			_ = buffer.Close()
-			return err
-		}
-
-		r.ContentLength = written
-		r.TransferEncoding = nil
-
-		r.Header.Set("Content-Encoding", "identity")
-		r.Header.Set("Content-Length", strconv.FormatInt(written, 10))
-
-		r.Body = buffer
-
-		if proxy.ModifyResponse != nil {
-			return proxy.ModifyResponse(r)
-		}
-
-		return nil
-	}
-	return proxy2
 }
