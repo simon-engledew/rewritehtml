@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 var headTag = []byte("head")
@@ -74,6 +75,7 @@ func InjectHead(w io.Writer, r io.Reader, data string) (n int64, err error) {
 }
 
 type responsePipe struct {
+	once       sync.Once
 	Body       chan io.ReadCloser
 	StatusCode int
 	header     http.Header
@@ -98,12 +100,14 @@ func (r *responsePipe) Header() http.Header {
 }
 
 func (r *responsePipe) Write(p []byte) (int, error) {
+	r.once.Do(func() {
+		r.Body <- r.pR
+	})
 	return r.pW.Write(p)
 }
 
 func (r *responsePipe) WriteHeader(statusCode int) {
 	r.StatusCode = statusCode
-	r.Body <- r.pR
 }
 
 func (r *responsePipe) Close() (err error) {
