@@ -1,4 +1,4 @@
-module github.com/simon-engledew/appendhead
+module github.com/simon-engledew/injecthead
 
 go 1.14
 
