@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"golang.org/x/net/html"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 var headTag = []byte("head")
@@ -123,10 +123,9 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (string, err
 
 		rp := NewResponsePipe(header)
 
-		var wg sync.WaitGroup
-		wg.Add(1)
+		done := make(chan struct{})
 		go func() {
-			defer wg.Done()
+			defer close(done)
 
 			select {
 			case <-ctx.Done():
@@ -139,15 +138,27 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (string, err
 					}
 				}()
 
+				// TODO: handle content encoding
 				if !strings.HasPrefix(header.Get("Content-Type"), "text/html") {
 					w.WriteHeader(rp.StatusCode)
-					_, _ = io.Copy(w, body)
+					if _, err := io.Copy(w, body); err != nil {
+						panic(err)
+					}
 					return
 				}
 
 				data, err := processRequest(r)
 				if err != nil {
+					_, _ = io.Copy(ioutil.Discard, body)
 					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+
+				if data == "" {
+					w.WriteHeader(rp.StatusCode)
+					if _, err := io.Copy(w, body); err != nil {
+						panic(err)
+					}
 					return
 				}
 
@@ -168,6 +179,9 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (string, err
 
 		_ = rp.Close()
 
-		wg.Wait()
+		select {
+		case _, _ = <-done:
+			break
+		}
 	})
 }
