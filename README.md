@@ -8,7 +8,7 @@ Can be run as a `httputil.SingleHostReverseProxy` in front of a webserver like N
 
 ```golang
 func csrfMeta(r *http.Request) (string, error) {
-    token := csrf.Token(r.Request)
+    token := csrf.Token(r)
     
     if token == "" {
         return "", errors.New("no csrf middleware installed")
