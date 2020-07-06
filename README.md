@@ -14,7 +14,7 @@ func csrfMeta(r *http.Request) (string, error) {
         return "", errors.New("no csrf middleware installed")
     }
     
-    return fmt.Sprintf(`<meta name="csrf" content="%s" />`, template.EscapeHTMLString(token)), nil
+    return fmt.Sprintf(`<meta name="csrf" content="%s" />`, template.HTMLEscapeString(token)), nil
 }
 
 fs := injecthead.Handle(http.FileServer(http.Dir(".")), meta)
