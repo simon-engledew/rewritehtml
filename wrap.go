@@ -1,12 +1,8 @@
 package injecthead // import "github.com/simon-engledew/injecthead"
 
 import (
-	"bytes"
-	"context"
-	"fmt"
 	"golang.org/x/net/html"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,178 +10,272 @@ import (
 
 var headTag = []byte("head")
 
-// InjectHead inserts data after the first head tag found in r
-func InjectHead(w io.Writer, r io.Reader, data string) (n int64, err error) {
-	if data == "" {
-		return io.Copy(w, r)
+type Scanner struct {
+	buffer      []byte
+	tokenizer   *html.Tokenizer
+	previousTag string
+}
+
+func (s *Scanner) Concat(p []byte) {
+	if s.tokenizer != nil {
+		s.buffer = append(s.buffer, s.tokenizer.Buffered()...)
+	}
+	s.buffer = append(s.buffer, p...)
+	s.tokenizer = nil
+}
+
+type ScannerState interface {
+	Raw() []byte
+	Err() error
+	TagName() (name []byte, hasAttr bool)
+	Token() html.Token
+}
+
+type BufferReader interface {
+	io.Reader
+	Buffered() int
+}
+
+type FragmentReader struct {
+	r   BufferReader
+	eof bool
+}
+
+func NewFragmentReader(r BufferReader, eof bool) *FragmentReader {
+	return &FragmentReader{
+		r,
+		eof,
+	}
+}
+
+func (s *FragmentReader) Read(p []byte) (int, error) {
+	size := len(p)
+	have := s.r.Buffered()
+	read := have
+
+	if !s.eof && size >= have {
+		return 0, io.ErrNoProgress
 	}
 
-	tokenizer := html.NewTokenizer(r)
+	if have == 0 {
+		if s.eof {
+			return 0, io.EOF
+		}
+		return 0, io.ErrNoProgress
+	}
 
-	var written int
+	if size < have {
+		read = size
+	}
 
+	var err error
+	if s.eof && read == have {
+		err = io.EOF
+	}
+
+	_, _ = s.r.Read(p[:read])
+
+	return read, err
+}
+
+func (s *Scanner) Buffered() int {
+	return len(s.buffer)
+}
+
+func (s *Scanner) Drain() io.Reader {
+	s.Concat([]byte{})
+	return NewFragmentReader(s, true)
+}
+
+func (s *Scanner) Read(p []byte) (int, error) {
+	size := len(p)
+	have := len(s.buffer)
+	read := have
+
+	if size < have {
+		read = size
+	}
+
+	if have == 0 {
+		return 0, io.ErrNoProgress
+	}
+
+	copy(p, s.buffer[:read])
+	s.buffer = s.buffer[read:]
+	return read, nil
+}
+
+func (s *Scanner) Next(atEOF bool) ([]byte, *html.Token, error) {
 	for {
-		tt := tokenizer.Next()
-
-		if tokenizerErr := tokenizer.Err(); tokenizerErr != nil {
-			if tokenizerErr != io.EOF {
-				err = tokenizerErr
-				return
-			}
-			break
+		if s.tokenizer == nil {
+			s.tokenizer = html.NewTokenizerFragment(NewFragmentReader(s, atEOF), s.previousTag)
 		}
 
-		written, err = w.Write(tokenizer.Raw())
+		tt := s.tokenizer.Next()
 
-		n += int64(written)
+		if tt == html.ErrorToken {
+			err := s.tokenizer.Err()
+			if err == io.ErrNoProgress {
+				s.Concat([]byte{})
+
+				if atEOF {
+					// recreate tokenizer
+					continue
+				}
+			}
+			return nil, nil, err
+		}
+
+		raw := s.tokenizer.Raw()
+		token := s.tokenizer.Token()
+		if tt == html.StartTagToken {
+			s.previousTag = token.Data
+		}
+		if tt == html.EndTagToken {
+			s.previousTag = ""
+		}
+
+		return raw, &token, nil
+	}
+}
+
+func NewScanner() *Scanner {
+	return &Scanner{}
+}
+
+type EditorFunc func(raw string, token *html.Token) (data string, done bool)
+
+type tokenEditor struct {
+	target  io.Writer
+	scanner *Scanner
+	rewrite EditorFunc
+	done    bool
+}
+
+func NewTokenEditor(w io.Writer, rewrite EditorFunc) *tokenEditor {
+	return &tokenEditor{
+		target:  w,
+		scanner: NewScanner(),
+		rewrite: rewrite,
+	}
+}
+
+func (i *tokenEditor) doWrite(atEOF bool) error {
+	for {
+		raw, token, err := i.scanner.Next(atEOF)
+		if !atEOF && err == io.ErrNoProgress {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		var data string
+
+		data, i.done = i.rewrite(string(raw), token)
+
+		_, err = i.target.Write([]byte(data))
+
+		if i.done {
+			_, _ = io.Copy(i.target, i.scanner.Drain())
+		}
+	}
+	return nil
+}
+
+func (i *tokenEditor) Write(p []byte) (int, error) {
+	if i.done {
+		return i.target.Write(p)
+	}
+	i.scanner.Concat(p)
+	return len(p), i.doWrite(false)
+}
+
+func (i *tokenEditor) Close() error {
+	return i.doWrite(true)
+}
+
+func AfterHead(data string) EditorFunc {
+	return func(raw string, token *html.Token) (string, bool) {
+		if token.Type == html.StartTagToken {
+			if token.Data == "head" {
+				return raw + data, true
+			}
+		}
+		return raw, false
+	}
+}
+
+type ResponseEditor struct {
+	rewrite    EditorFunc
+	once       sync.Once
+	target     http.ResponseWriter
+	body       io.WriteCloser
+	statusCode int
+}
+
+func NewResponseEditor(w http.ResponseWriter, rewrite EditorFunc) *ResponseEditor {
+	return &ResponseEditor{
+		target:     w,
+		rewrite:    rewrite,
+		statusCode: http.StatusOK,
+	}
+}
+
+func (r *ResponseEditor) Header() http.Header {
+	return r.target.Header()
+}
+
+func (r *ResponseEditor) Write(p []byte) (int, error) {
+	r.once.Do(func() {
+		header := r.target.Header()
+
+		// TODO: handle content encoding
+
+		if strings.HasPrefix(header.Get("Content-Type"), "text/html") {
+			header.Set("Transfer-Encoding", "chunked")
+			header.Del("Content-Length")
+
+			r.body = NewTokenEditor(r.target, r.rewrite)
+		}
+
+		r.target.WriteHeader(r.statusCode)
+	})
+	if r.body != nil {
+		return r.body.Write(p)
+	}
+	if r.target != nil {
+		return r.target.Write(p)
+	}
+	return 0, io.ErrClosedPipe
+}
+
+func (r *ResponseEditor) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+}
+
+func (r *ResponseEditor) Close() error {
+	if r.body != nil {
+		return r.body.Close()
+	}
+	return nil
+}
+
+func Handle(next http.Handler, processRequest func(r *http.Request) (EditorFunc, error)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("Accept-Encoding", "identity")
+
+		fn, err := processRequest(r)
 
 		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		if tt == html.StartTagToken {
-			if tag, _ := tokenizer.TagName(); bytes.EqualFold(tag, headTag) {
-				written, err = fmt.Fprint(w, data)
+		editor := NewResponseEditor(w, fn)
 
-				n += int64(written)
+		next.ServeHTTP(editor, r)
 
-				if err != nil {
-					return
-				}
-
-				written, err = w.Write(tokenizer.Buffered())
-
-				n += int64(written)
-
-				if err != nil {
-					return
-				}
-
-				var copied int64
-
-				copied, err = io.Copy(w, r)
-
-				n += copied
-
-				return
-			}
-		}
-	}
-	return
-}
-
-type responsePipe struct {
-	once       sync.Once
-	Body       chan io.ReadCloser
-	StatusCode int
-	header     http.Header
-	pW         *io.PipeWriter
-	pR         *io.PipeReader
-}
-
-func NewResponsePipe(header http.Header) *responsePipe {
-	pR, pW := io.Pipe()
-
-	return &responsePipe{
-		StatusCode: http.StatusOK,
-		header:     header,
-		Body:       make(chan io.ReadCloser),
-		pW:         pW,
-		pR:         pR,
-	}
-}
-
-func (r *responsePipe) Header() http.Header {
-	return r.header
-}
-
-func (r *responsePipe) Write(p []byte) (int, error) {
-	r.once.Do(func() {
-		r.Body <- r.pR
-	})
-	return r.pW.Write(p)
-}
-
-func (r *responsePipe) WriteHeader(statusCode int) {
-	r.StatusCode = statusCode
-}
-
-func (r *responsePipe) Close() (err error) {
-	return r.pW.Close()
-}
-
-// Handle wraps next in a handler which will insert the result of processRequest at the first
-// head tag found in the response body
-func Handle(next http.Handler, processRequest func(r *http.Request) (string, error)) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancelFunc := context.WithCancel(r.Context())
-		defer cancelFunc()
-
-		r.Header.Set("Accept-Encoding", "identity")
-
-		header := w.Header()
-
-		rp := NewResponsePipe(header)
-
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-
-			select {
-			case <-ctx.Done():
-				// request had no body or was cancelled
-				return
-			case body := <-rp.Body:
-				defer func() {
-					if err := body.Close(); err != nil {
-						panic(err)
-					}
-				}()
-
-				// TODO: handle content encoding
-				if !strings.HasPrefix(header.Get("Content-Type"), "text/html") {
-					w.WriteHeader(rp.StatusCode)
-					if _, err := io.Copy(w, body); err != nil {
-						panic(err)
-					}
-					return
-				}
-
-				data, err := processRequest(r)
-				if err != nil {
-					_, _ = io.Copy(ioutil.Discard, body)
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-
-				if data == "" {
-					w.WriteHeader(rp.StatusCode)
-					if _, err := io.Copy(w, body); err != nil {
-						panic(err)
-					}
-					return
-				}
-
-				header.Set("Transfer-Encoding", "chunked")
-				header.Del("Content-Length")
-
-				w.WriteHeader(rp.StatusCode)
-
-				if _, err := InjectHead(w, body, data); err != nil {
-					panic(err)
-				}
-
-				return
-			}
-		}()
-
-		next.ServeHTTP(rp, r)
-
-		_ = rp.Close()
-
-		select {
-		case _, _ = <-done:
-			break
-		}
+		editor.Close()
 	})
 }
