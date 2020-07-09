@@ -276,6 +276,8 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (EditorFunc,
 
 		next.ServeHTTP(editor, r)
 
-		editor.Close()
+		if err := editor.Close(); err != nil {
+			panic(err)
+		}
 	})
 }
