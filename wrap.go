@@ -134,6 +134,7 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (string, err
 			select {
 			case <-ctx.Done():
 				// request had no body or was cancelled
+				w.WriteHeader(rp.StatusCode)
 				return
 			case body := <-rp.Body:
 				defer func() {
