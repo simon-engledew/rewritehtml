@@ -7,14 +7,14 @@ Useful if you have server side rendered a React application and want to access a
 Can be run as a `httputil.SingleHostReverseProxy` in front of a webserver like Nginx, or as a `http.Handler` wrapping another `http.Handler`, e.g: `http.FileServer`.
 
 ```golang
-func csrfMeta(r *http.Request) (string, error) {
+func csrfMeta(r *http.Request) (injecthead.EditorFunc, error) {
     token := csrf.Token(r)
     
     if token == "" {
-        return "", errors.New("no csrf middleware installed")
+        return nil, errors.New("no csrf middleware installed")
     }
     
-    return fmt.Sprintf(`<meta name="csrf" content="%s" />`, template.HTMLEscapeString(token)), nil
+    return injecthead.AfterHead(fmt.Sprintf(`<meta name="csrf" content="%s" />`, template.HTMLEscapeString(token))), nil
 }
 
 fs := injecthead.Handle(http.FileServer(http.Dir(".")), meta)
