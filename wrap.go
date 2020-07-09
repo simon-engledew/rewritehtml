@@ -1,6 +1,7 @@
 package injecthead // import "github.com/simon-engledew/injecthead"
 
 import (
+	"errors"
 	"golang.org/x/net/html"
 	"io"
 	"net/http"
@@ -18,10 +19,10 @@ type Scanner struct {
 
 func (s *Scanner) Concat(p []byte) {
 	if s.tokenizer != nil {
-		s.buffer = append(s.buffer, s.tokenizer.Buffered()...)
+		s.buffer = append(s.tokenizer.Buffered(), s.buffer...)
+		s.tokenizer = nil
 	}
 	s.buffer = append(s.buffer, p...)
-	s.tokenizer = nil
 }
 
 type ScannerState interface {
@@ -48,17 +49,17 @@ func NewFragmentReader(r BufferReader, eof bool) *FragmentReader {
 	}
 }
 
-func (s *FragmentReader) Read(p []byte) (int, error) {
+func (fr *FragmentReader) Read(p []byte) (int, error) {
 	size := len(p)
-	have := s.r.Buffered()
+	have := fr.r.Buffered()
 	read := have
 
-	if !s.eof && size >= have {
+	if !fr.eof && size > have {
 		return 0, io.ErrNoProgress
 	}
 
 	if have == 0 {
-		if s.eof {
+		if fr.eof {
 			return 0, io.EOF
 		}
 		return 0, io.ErrNoProgress
@@ -69,22 +70,18 @@ func (s *FragmentReader) Read(p []byte) (int, error) {
 	}
 
 	var err error
-	if s.eof && read == have {
+
+	n, err := fr.r.Read(p[:read])
+
+	if err == nil && fr.eof && read == have {
 		err = io.EOF
 	}
 
-	_, _ = s.r.Read(p[:read])
-
-	return read, err
+	return n, err
 }
 
 func (s *Scanner) Buffered() int {
 	return len(s.buffer)
-}
-
-func (s *Scanner) Drain() io.Reader {
-	s.Concat([]byte{})
-	return NewFragmentReader(s, true)
 }
 
 func (s *Scanner) Read(p []byte) (int, error) {
@@ -105,9 +102,18 @@ func (s *Scanner) Read(p []byte) (int, error) {
 	return read, nil
 }
 
+func (s *Scanner) Drain() io.Reader {
+	s.Concat([]byte{})
+	return NewFragmentReader(s, true)
+}
+
 func (s *Scanner) Next(atEOF bool) ([]byte, *html.Token, error) {
 	for {
 		if s.tokenizer == nil {
+			show := 512
+			if len(s.buffer) < show {
+				show = len(s.buffer)
+			}
 			s.tokenizer = html.NewTokenizerFragment(NewFragmentReader(s, atEOF), s.previousTag)
 		}
 
@@ -123,6 +129,7 @@ func (s *Scanner) Next(atEOF bool) ([]byte, *html.Token, error) {
 					continue
 				}
 			}
+
 			return nil, nil, err
 		}
 
@@ -161,7 +168,7 @@ func NewTokenEditor(w io.Writer, rewrite EditorFunc) *tokenEditor {
 }
 
 func (i *tokenEditor) doWrite(atEOF bool) error {
-	for {
+	for !i.done {
 		raw, token, err := i.scanner.Next(atEOF)
 		if !atEOF && err == io.ErrNoProgress {
 			break
@@ -175,10 +182,9 @@ func (i *tokenEditor) doWrite(atEOF bool) error {
 		data, i.done = i.rewrite(string(raw), token)
 
 		_, err = i.target.Write([]byte(data))
-
-		if i.done {
-			_, _ = io.Copy(i.target, i.scanner.Drain())
-		}
+	}
+	if i.done {
+		_, _ = io.Copy(i.target, i.scanner.Drain())
 	}
 	return nil
 }
@@ -257,6 +263,8 @@ func (r *ResponseEditor) WriteHeader(statusCode int) {
 func (r *ResponseEditor) Close() error {
 	if r.body != nil {
 		return r.body.Close()
+	} else {
+		r.target.WriteHeader(r.statusCode)
 	}
 	return nil
 }
@@ -276,7 +284,7 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (EditorFunc,
 
 		next.ServeHTTP(editor, r)
 
-		if err := editor.Close(); err != nil {
+		if err := editor.Close(); err != nil && !errors.Is(err, io.EOF) {
 			panic(err)
 		}
 	})

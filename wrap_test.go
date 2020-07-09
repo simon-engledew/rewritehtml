@@ -4,6 +4,7 @@ package injecthead
 import (
 	"bytes"
 	"github.com/stretchr/testify/assert"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +42,20 @@ func TestShortWrite(t *testing.T) {
 	assert.Equal(t, `<head><meta name="injecthead" content="true" /></head><pre>moose</pre>`, output.String())
 }
 
+func TestConcat(t *testing.T) {
+	output := new(bytes.Buffer)
+
+	zeros := strings.Repeat(`0`, 1024)
+	script := strings.Repeat(`var moose; `, 512)
+
+	editor := NewTokenEditor(output, AfterHead(`<meta name="injecthead" content="true" />`))
+	editor.Write([]byte(`<!DOCTYPE html><html><head><link rel="icon" type="image/png" href="data:image/png;base64,` + zeros))
+	editor.Write([]byte(`</link></head><script>` + script + `</script>`))
+	editor.Close()
+
+	assert.Equal(t, `<!DOCTYPE html><html><head><meta name="injecthead" content="true" /><link rel="icon" type="image/png" href="data:image/png;base64,`+zeros+`</link></head><script>`+script+`</script>`, output.String())
+}
+
 func TestCDataWrite(t *testing.T) {
 	output := new(bytes.Buffer)
 
@@ -52,15 +67,3 @@ func TestCDataWrite(t *testing.T) {
 
 	assert.Equal(t, `<script>javascript {} <head></head>moose</script><head><meta name="injecthead" content="true" /></head>`, output.String())
 }
-
-//func meta(r *http.Request) (EditorFunc, error) {
-//	return AfterHead(fmt.Sprintf(`<meta name="injecthead" content="%s" />`, template.HTMLEscapeString("injected"))), nil
-//}
-//
-//func TestWrap(t *testing.T) {
-//	fs := Handle(http.FileServer(http.Dir(".")), meta)
-//
-//	mux := http.NewServeMux()
-//	mux.Handle("/", fs)
-//	http.ListenAndServe("127.0.0.1:3000", mux)
-//}
