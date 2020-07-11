@@ -2,11 +2,12 @@ package injecthead // import "github.com/simon-engledew/injecthead"
 
 import (
 	"errors"
-	"golang.org/x/net/html"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
+
+	"golang.org/x/net/html"
 )
 
 var headTag = []byte("head")
@@ -23,13 +24,6 @@ func (s *Scanner) Concat(p []byte) {
 		s.tokenizer = nil
 	}
 	s.buffer = append(s.buffer, p...)
-}
-
-type ScannerState interface {
-	Raw() []byte
-	Err() error
-	TagName() (name []byte, hasAttr bool)
-	Token() html.Token
 }
 
 type BufferReader interface {
@@ -110,10 +104,6 @@ func (s *Scanner) Drain() io.Reader {
 func (s *Scanner) Next(atEOF bool) ([]byte, *html.Token, error) {
 	for {
 		if s.tokenizer == nil {
-			show := 512
-			if len(s.buffer) < show {
-				show = len(s.buffer)
-			}
 			s.tokenizer = html.NewTokenizerFragment(NewFragmentReader(s, atEOF), s.previousTag)
 		}
 
@@ -247,6 +237,7 @@ func (r *ResponseEditor) Write(p []byte) (int, error) {
 
 		r.target.WriteHeader(r.statusCode)
 	})
+
 	if r.body != nil {
 		return r.body.Write(p)
 	}
