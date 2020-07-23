@@ -1,4 +1,4 @@
-package injecthead // import "github.com/simon-engledew/injecthead"
+package rewritehtml // import "github.com/simon-engledew/rewritehtml"
 
 import (
 	"errors"

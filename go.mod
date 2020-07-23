@@ -1,4 +1,4 @@
-module github.com/simon-engledew/injecthead
+module github.com/simon-engledew/rewritehtml
 
 go 1.14
 
