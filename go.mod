@@ -1,6 +1,6 @@
 module github.com/simon-engledew/rewritehtml
 
-go 1.14
+go 1.15
 
 require (
 	github.com/go-on/stack v6.0.2+incompatible // indirect
