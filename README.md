@@ -1,3 +1,5 @@
+![Go](https://github.com/simon-engledew/rewritehtml/workflows/Go/badge.svg)
+
 ### rewritehtml
 
 Alter the HTML response body of a http.Handler.
