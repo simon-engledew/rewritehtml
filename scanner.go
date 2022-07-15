@@ -57,7 +57,7 @@ func (s *Scanner) Read(p []byte) (int, error) {
 
 // Drain returns a reader that will consume the remaining buffer.
 func (s *Scanner) Drain() io.Reader {
-	s.Concat([]byte{})
+	s.Concat(nil)
 	return NewFragmentReader(s, true)
 }
 
@@ -75,7 +75,7 @@ func (s *Scanner) Next(atEOF bool) (raw []byte, token *html.Token, err error) {
 			nextErr := s.tokenizer.Err()
 
 			if nextErr == io.ErrNoProgress {
-				s.Concat([]byte{})
+				s.Concat(nil)
 				if atEOF {
 					// recreate tokenizer
 					continue
