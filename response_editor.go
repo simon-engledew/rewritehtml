@@ -43,7 +43,9 @@ func (r *ResponseEditor) Write(p []byte) (int, error) {
 			r.body = NewTokenEditor(r.target, r.rewriteFn)
 		}
 
-		r.target.WriteHeader(r.statusCode)
+		r.writeHeaderOnce.Do(func() {
+			r.target.WriteHeader(r.statusCode)
+		})
 	})
 
 	if r.body != nil {
@@ -53,16 +55,16 @@ func (r *ResponseEditor) Write(p []byte) (int, error) {
 }
 
 func (r *ResponseEditor) WriteHeader(statusCode int) {
-	r.writeHeaderOnce.Do(func() {
-		r.statusCode = statusCode
-	})
+	r.statusCode = statusCode
 }
 
 func (r *ResponseEditor) Close() error {
 	if r.body != nil {
 		return r.body.Close()
 	} else {
-		r.target.WriteHeader(r.statusCode)
+		r.writeHeaderOnce.Do(func() {
+			r.target.WriteHeader(r.statusCode)
+		})
 	}
 	return nil
 }

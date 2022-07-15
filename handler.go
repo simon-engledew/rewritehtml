@@ -1,4 +1,4 @@
-package rewritehtml // import "github.com/simon-engledew/rewritehtml"
+package rewritehtml
 
 import (
 	"errors"

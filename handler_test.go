@@ -1,8 +1,9 @@
-package rewritehtml
+package rewritehtml_test
 
 //
 import (
 	"errors"
+	"github.com/simon-engledew/rewritehtml"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/html"
 	"io"
@@ -24,7 +25,7 @@ func TestHandlerWithIdentity(t *testing.T) {
 		_, _ = io.WriteString(w, `<html><head><title>Basic Document></head><body>Found</body></html>`)
 	})
 
-	handler := Handle(basicDocument, func(r *http.Request) (EditorFunc, error) {
+	handler := rewritehtml.Handle(basicDocument, func(r *http.Request) (rewritehtml.EditorFunc, error) {
 		return func(raw []byte, token *html.Token) (data []byte, done bool) {
 			return nil, false
 		}, nil
@@ -50,8 +51,8 @@ func TestHandlerWithHtml(t *testing.T) {
 		_, _ = io.WriteString(w, `<html><head><title>Basic Document></head><body>Found</body></html>`)
 	})
 
-	handler := Handle(basicDocument, func(r *http.Request) (EditorFunc, error) {
-		return AfterHead(`<meta name="rewritehtml" content="true" />`), nil
+	handler := rewritehtml.Handle(basicDocument, func(r *http.Request) (rewritehtml.EditorFunc, error) {
+		return rewritehtml.AfterHead(`<meta name="rewritehtml" content="true" />`), nil
 	})
 
 	handler.ServeHTTP(rr, req)
@@ -76,8 +77,8 @@ func TestHandlerWithError(t *testing.T) {
 		_, _ = io.WriteString(w, `<html><head><title>Basic Document></head><body>Found</body></html>`)
 	})
 
-	handler := Handle(basicDocument, func(r *http.Request) (EditorFunc, error) {
-		return AfterHead(`<meta name="rewritehtml" content="true" />`), errTestFailed
+	handler := rewritehtml.Handle(basicDocument, func(r *http.Request) (rewritehtml.EditorFunc, error) {
+		return rewritehtml.AfterHead(`<meta name="rewritehtml" content="true" />`), errTestFailed
 	})
 
 	handler.ServeHTTP(rr, req)
@@ -99,7 +100,7 @@ func TestHandlerWithJson(t *testing.T) {
 		_, _ = io.WriteString(w, `{"content": "moose"}`)
 	})
 
-	handler := Handle(basicDocument, func(r *http.Request) (EditorFunc, error) {
+	handler := rewritehtml.Handle(basicDocument, func(r *http.Request) (rewritehtml.EditorFunc, error) {
 		return func(raw []byte, token *html.Token) (data []byte, done bool) {
 			panic("function should not have been called for Content-Type application/json")
 		}, nil

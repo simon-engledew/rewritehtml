@@ -13,7 +13,7 @@ type Scanner struct {
 	previousTag string
 }
 
-// NewScanner returns a scanner that is ready to Read a HTML document.
+// NewScanner returns a scanner that is ready to Read an HTML document.
 func NewScanner() *Scanner {
 	return &Scanner{}
 }
