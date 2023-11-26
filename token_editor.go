@@ -1,6 +1,9 @@
 package rewritehtml
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 type TokenEditor struct {
 	target    io.Writer
@@ -22,7 +25,7 @@ func NewTokenEditor(w io.Writer, rewriteFn EditorFunc) *TokenEditor {
 func (i *TokenEditor) doWrite(atEOF bool) error {
 	for !i.done {
 		raw, token, err := i.scanner.Next(atEOF)
-		if !atEOF && err == io.ErrNoProgress {
+		if !atEOF && errors.Is(err, io.ErrNoProgress) {
 			break
 		}
 		if err != nil {

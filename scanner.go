@@ -1,6 +1,7 @@
 package rewritehtml
 
 import (
+	"errors"
 	"golang.org/x/net/html"
 	"io"
 )
@@ -74,7 +75,7 @@ func (s *Scanner) Next(atEOF bool) (raw []byte, token *html.Token, err error) {
 		if tt == html.ErrorToken {
 			nextErr := s.tokenizer.Err()
 
-			if nextErr == io.ErrNoProgress {
+			if errors.Is(nextErr, io.ErrNoProgress) {
 				s.Concat(nil)
 				if atEOF {
 					// recreate tokenizer

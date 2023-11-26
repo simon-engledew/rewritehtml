@@ -16,21 +16,41 @@ import (
 // without being parsed.
 type EditorFunc func(raw []byte, token *html.Token) (data []byte, done bool)
 
-var headTag = []byte("head")
-
-// AfterHead returns an EditorFunc that will inject data after the first <head> tag.
-func AfterHead(data string) EditorFunc {
+func Attrs(replacements map[string]string) EditorFunc {
 	return func(raw []byte, token *html.Token) ([]byte, bool) {
 		if token.Type == html.StartTagToken {
-			if token.Data == "head" {
-				combined := make([]byte, 0, len(raw)+len(data))
-				combined = append(combined, raw...)
-				combined = append(combined, data...)
-				return combined, true
+			var found bool
+			for n := range token.Attr {
+				if val, ok := replacements[token.Attr[n].Key]; ok {
+					token.Attr[n].Val = val
+					found = true
+				}
+			}
+			if found {
+				return []byte(token.String()), false
 			}
 		}
 		return raw, false
 	}
+}
+
+func AfterTag(tag, data string, once bool) EditorFunc {
+	return func(raw []byte, token *html.Token) ([]byte, bool) {
+		if token.Type == html.StartTagToken {
+			if token.Data == tag {
+				combined := make([]byte, 0, len(raw)+len(data))
+				combined = append(combined, raw...)
+				combined = append(combined, data...)
+				return combined, once
+			}
+		}
+		return raw, false
+	}
+}
+
+// AfterHead returns an EditorFunc that will inject data after the first <head> tag.
+func AfterHead(data string) EditorFunc {
+	return AfterTag("head", data, true)
 }
 
 // Handle will rewriteFn any text/html documents that are served by next.
@@ -45,7 +65,6 @@ func Handle(next http.Handler, processRequest func(r *http.Request) (EditorFunc,
 		r.Header.Set("Accept-Encoding", "identity")
 
 		fn, err := processRequest(r)
-
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
